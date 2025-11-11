@@ -19,19 +19,43 @@ actor ReadyState {
     }
 }
 
+/// Represents the current state of the conversation
+enum ConversationState: Int {
+    case idle = 0           // No activity
+    case userSpeaking = 1   // User is speaking
+    case aiThinking = 2     // AI is processing/preparing response
+    case aiSpeaking = 3     // AI is speaking
+}
+
 @Observable
 @MainActor
 final class ConversationManager {
+    // Connection state
     private(set) var isConnected = false
     private(set) var isListening = false
-    private(set) var audioLevel: Float = 0.0
     private(set) var errorMessage: String?
+
+    // Audio levels and frequency data
+    private(set) var audioLevel: Float = 0.0           // User mic RMS amplitude
+    private(set) var aiAudioLevel: Float = 0.0         // AI speech RMS amplitude
+    private(set) var lowFrequency: Float = 0.0         // Low frequency band (0-250Hz)
+    private(set) var midFrequency: Float = 0.0         // Mid frequency band (250-2000Hz)
+    private(set) var highFrequency: Float = 0.0        // High frequency band (2000Hz+)
+
+    // Conversation state
+    private(set) var conversationState: ConversationState = .idle
+
+    // Smoothing for visual transitions
+    private var smoothedAudioLevel: Float = 0.0
+    private var smoothedAiAudioLevel: Float = 0.0
+    private var smoothedLowFreq: Float = 0.0
+    private var smoothedMidFreq: Float = 0.0
+    private var smoothedHighFreq: Float = 0.0
 
     private var realtimeSession: OpenAIRealtimeSession?
     private var audioController: AudioController?
     private var sessionTask: Task<Void, Never>?
     private var micTask: Task<Void, Never>?
-    private var audioLevelTimer: Timer?
 
     private let modelName = "gpt-4o-mini-realtime-preview-2024-12-17"
 
@@ -94,6 +118,42 @@ final class ConversationManager {
                     for await buffer in micStream {
                         guard !Task.isCancelled else { break }
 
+                        // Analyze audio buffer for amplitude and frequency data
+                        let rms = AudioAnalyzer.calculateRMS(buffer: buffer)
+                        let frequencies = AudioAnalyzer.analyzeFrequencies(buffer: buffer)
+
+                        // Update UI on MainActor with smoothed values
+                        await MainActor.run {
+                            self.smoothedAudioLevel = AudioAnalyzer.smoothValue(
+                                self.smoothedAudioLevel,
+                                target: rms,
+                                smoothing: 0.7
+                            )
+                            self.audioLevel = self.smoothedAudioLevel
+
+                            self.smoothedLowFreq = AudioAnalyzer.smoothValue(
+                                self.smoothedLowFreq,
+                                target: frequencies.low,
+                                smoothing: 0.7
+                            )
+                            self.lowFrequency = self.smoothedLowFreq
+
+                            self.smoothedMidFreq = AudioAnalyzer.smoothValue(
+                                self.smoothedMidFreq,
+                                target: frequencies.mid,
+                                smoothing: 0.7
+                            )
+                            self.midFrequency = self.smoothedMidFreq
+
+                            self.smoothedHighFreq = AudioAnalyzer.smoothValue(
+                                self.smoothedHighFreq,
+                                target: frequencies.high,
+                                smoothing: 0.7
+                            )
+                            self.highFrequency = self.smoothedHighFreq
+                        }
+
+                        // Send audio to OpenAI
                         if await readyState.isReady,
                            let base64Audio = AudioUtils.base64EncodeAudioPCMBuffer(from: buffer) {
                             await session.sendMessage(
@@ -127,7 +187,6 @@ final class ConversationManager {
             // Update connection state
             isConnected = true
             isListening = true
-            startMonitoringAudioLevels()
 
             print("ConversationManager: Successfully started conversation")
 
@@ -155,26 +214,62 @@ final class ConversationManager {
 
         case .sessionUpdated:
             print("Session updated - OpenAI is ready")
+            await MainActor.run {
+                self.conversationState = .idle
+            }
             // Optionally start AI speaking first
             await session.sendMessage(OpenAIRealtimeResponseCreate())
 
         case .responseCreated:
-            print("Response created - Ready to receive audio")
+            print("Response created - AI is thinking")
             await readyState.setReady(true)
+            await MainActor.run {
+                self.conversationState = .aiThinking
+            }
 
         case .responseAudioDelta(let base64Audio):
-            // Play audio chunk from AI (audioController is @RealtimeActor isolated)
+            // Analyze AI audio for amplitude
+            let aiRms = AudioAnalyzer.calculateRMSFromBase64(base64String: base64Audio)
+
+            // Update AI audio level with smoothing
+            await MainActor.run {
+                self.smoothedAiAudioLevel = AudioAnalyzer.smoothValue(
+                    self.smoothedAiAudioLevel,
+                    target: aiRms,
+                    smoothing: 0.7
+                )
+                self.aiAudioLevel = self.smoothedAiAudioLevel
+                self.conversationState = .aiSpeaking
+            }
+
+            // Play audio chunk from AI
             audioController.playPCM16Audio(base64String: base64Audio)
 
         case .inputAudioBufferSpeechStarted:
             print("User started speaking - interrupting playback")
             audioController.interruptPlayback()
+            await MainActor.run {
+                self.conversationState = .userSpeaking
+            }
 
         case .responseTranscriptDone(let transcript):
             print("AI: \(transcript)")
+            await MainActor.run {
+                // Fade out AI audio level
+                self.aiAudioLevel = 0.0
+                self.smoothedAiAudioLevel = 0.0
+                if self.conversationState == .aiSpeaking {
+                    self.conversationState = .idle
+                }
+            }
 
         case .inputAudioTranscriptionCompleted(let transcript):
             print("User: \(transcript)")
+            await MainActor.run {
+                if self.conversationState == .userSpeaking {
+                    self.conversationState = .idle
+                }
+            }
 
         case .responseFunctionCallArgumentsDone(let name, let args, let callId):
             print("Function call: \(name)(\(args)) - callId: \(callId)")
@@ -197,8 +292,6 @@ final class ConversationManager {
     func stopConversation() {
         print("ConversationManager.stopConversation - Stopping...")
 
-        stopMonitoringAudioLevels()
-
         // Cancel tasks
         sessionTask?.cancel()
         micTask?.cancel()
@@ -217,9 +310,20 @@ final class ConversationManager {
         self.audioController = nil
         self.realtimeSession = nil
 
+        // Reset all state
         isConnected = false
         isListening = false
         audioLevel = 0.0
+        aiAudioLevel = 0.0
+        lowFrequency = 0.0
+        midFrequency = 0.0
+        highFrequency = 0.0
+        smoothedAudioLevel = 0.0
+        smoothedAiAudioLevel = 0.0
+        smoothedLowFreq = 0.0
+        smoothedMidFreq = 0.0
+        smoothedHighFreq = 0.0
+        conversationState = .idle
         errorMessage = nil
 
         print("ConversationManager: Conversation stopped")
@@ -262,22 +366,5 @@ final class ConversationManager {
             return false
         }
         #endif
-    }
-
-    private func startMonitoringAudioLevels() {
-        // Simulate audio levels for visualization
-        // In a production app, you could extract actual audio levels from the PCM buffers
-        audioLevelTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self, self.isListening else { return }
-                // Simulate varying audio levels
-                self.audioLevel = Float.random(in: 0.0...1.0) * 0.3
-            }
-        }
-    }
-
-    private func stopMonitoringAudioLevels() {
-        audioLevelTimer?.invalidate()
-        audioLevelTimer = nil
     }
 }

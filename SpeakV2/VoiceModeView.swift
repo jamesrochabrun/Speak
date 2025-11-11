@@ -35,7 +35,7 @@ struct VoiceModeView: View {
                 Spacer()
 
                 // Audio visualizer
-                MetalAudioVisualizerView(audioLevel: conversationManager.audioLevel)
+                SwiftUIAudioVisualizerView(conversationManager: conversationManager)
                     .frame(width: 300, height: 300)
 
                 // Status text
