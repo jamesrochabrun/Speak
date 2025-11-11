@@ -27,6 +27,14 @@ enum ConversationState: Int {
     case aiSpeaking = 3     // AI is speaking
 }
 
+/// Represents a single message in the conversation
+struct ConversationMessage: Identifiable {
+    let id = UUID()
+    let text: String
+    let isUser: Bool
+    let timestamp: Date
+}
+
 @Observable
 @MainActor
 final class ConversationManager {
@@ -44,6 +52,9 @@ final class ConversationManager {
 
     // Conversation state
     private(set) var conversationState: ConversationState = .idle
+
+    // Conversation messages
+    private(set) var messages: [ConversationMessage] = []
 
     // Smoothing for visual transitions
     private var smoothedAudioLevel: Float = 0.0
@@ -255,6 +266,13 @@ final class ConversationManager {
         case .responseTranscriptDone(let transcript):
             print("AI: \(transcript)")
             await MainActor.run {
+                // Add AI message to conversation
+                self.messages.append(ConversationMessage(
+                    text: transcript,
+                    isUser: false,
+                    timestamp: Date()
+                ))
+
                 // Fade out AI audio level
                 self.aiAudioLevel = 0.0
                 self.smoothedAiAudioLevel = 0.0
@@ -266,6 +284,13 @@ final class ConversationManager {
         case .inputAudioTranscriptionCompleted(let transcript):
             print("User: \(transcript)")
             await MainActor.run {
+                // Add user message to conversation
+                self.messages.append(ConversationMessage(
+                    text: transcript,
+                    isUser: true,
+                    timestamp: Date()
+                ))
+
                 if self.conversationState == .userSpeaking {
                     self.conversationState = .idle
                 }
@@ -325,6 +350,7 @@ final class ConversationManager {
         smoothedHighFreq = 0.0
         conversationState = .idle
         errorMessage = nil
+        messages = []
 
         print("ConversationManager: Conversation stopped")
     }

@@ -38,6 +38,11 @@ struct VoiceModeView: View {
                 SwiftUIAudioVisualizerView(conversationManager: conversationManager)
                     .frame(width: 300, height: 300)
 
+                // Conversation transcript
+                ConversationTranscriptView(messages: conversationManager.messages)
+                    .frame(height: 220)
+                    .frame(maxWidth: 500)
+
                 // Status text
                 VStack(spacing: 12) {
                     if isInitializing {
