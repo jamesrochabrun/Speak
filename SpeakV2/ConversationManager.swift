@@ -70,36 +70,20 @@ final class ConversationManager {
   
   private let modelName = "gpt-4o-mini-realtime-preview-2024-12-17"
   
-  func startConversation(apiKey: String) async {
+  func startConversation(
+    service: OpenAIService,
+    configuration: OpenAIRealtimeSessionConfiguration
+  ) async {
     do {
       print("ConversationManager.startConversation - Starting...")
-      
+
       // Request microphone permission
       let permissionGranted = await requestMicrophonePermission()
       guard permissionGranted else {
         errorMessage = "Microphone permission is required for voice mode"
         return
       }
-      
-      // Clean the API key
-      let cleanApiKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-      
-      // Create OpenAI service
-      let service = OpenAIServiceFactory.service(apiKey: cleanApiKey)
-      
-      // Configure session
-      let configuration = OpenAIRealtimeSessionConfiguration(
-        inputAudioFormat: .pcm16,
-        inputAudioTranscription: .init(model: "whisper-1"),
-        instructions: "You are a helpful AI assistant. Have a natural conversation with the user.",
-        maxResponseOutputTokens: .int(4096),
-        modalities: [.audio, .text],
-        outputAudioFormat: .pcm16,
-        temperature: 0.7,
-        turnDetection: .init(type: .semanticVAD(eagerness: .medium)),
-        voice: "alloy"
-      )
-      
+
       // Create realtime session and audio controller on RealtimeActor
       print("Creating realtime session...")
       

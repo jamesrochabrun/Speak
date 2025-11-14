@@ -8,10 +8,12 @@
 import SwiftUI
 
 struct SettingsView: View {
-  @Bindable var settingsManager: SettingsManager
+  @Environment(SettingsManager.self) private var settings
   @Environment(\.dismiss) private var dismiss
-  
+
   var body: some View {
+    @Bindable var settingsManager = settings
+
     NavigationStack {
       Form {
         Section {
@@ -53,5 +55,6 @@ struct SettingsView: View {
 }
 
 #Preview {
-  SettingsView(settingsManager: SettingsManager())
+  SettingsView()
+    .environment(SettingsManager())
 }

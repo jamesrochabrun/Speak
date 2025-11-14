@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct VoiceModeView: View {
-  let settingsManager: SettingsManager
+  @Environment(OpenAIServiceManager.self) private var serviceManager
   @Environment(\.dismiss) private var dismiss
   @State private var conversationManager = ConversationManager()
   @State private var isInitializing = true
@@ -95,14 +95,21 @@ struct VoiceModeView: View {
   }
   
   private func startConversation() async {
+    guard let service = serviceManager.service else {
+      // Service not available - this shouldn't happen if ContentView validates correctly
+      // ConversationManager will handle showing the error
+      isInitializing = false
+      return
+    }
+
     isInitializing = true
-    print("VoiceModeView.startConversation - API key length: \(settingsManager.apiKey.count)")
-    print("VoiceModeView.startConversation - Has newlines: \(settingsManager.apiKey.contains("\n"))")
-    await conversationManager.startConversation(apiKey: settingsManager.apiKey)
+    let configuration = serviceManager.createSessionConfiguration()
+    await conversationManager.startConversation(service: service, configuration: configuration)
     isInitializing = false
   }
 }
 
 #Preview {
-  VoiceModeView(settingsManager: SettingsManager())
+  VoiceModeView()
+    .environment(OpenAIServiceManager())
 }

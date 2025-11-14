@@ -8,7 +8,8 @@
 import SwiftUI
 
 struct ContentView: View {
-  @State private var settingsManager = SettingsManager()
+  @Environment(SettingsManager.self) private var settingsManager
+  @Environment(OpenAIServiceManager.self) private var serviceManager
   @State private var showingVoiceMode = false
   @State private var showingSettings = false
   
@@ -32,7 +33,7 @@ struct ContentView: View {
         Spacer()
         
         Button {
-          if settingsManager.hasValidAPIKey {
+          if serviceManager.hasValidService {
             showingVoiceMode = true
           } else {
             showingSettings = true
@@ -70,15 +71,15 @@ struct ContentView: View {
       }
     }
     .sheet(isPresented: $showingSettings) {
-      SettingsView(settingsManager: settingsManager)
+      SettingsView()
     }
 #if os(macOS)
     .sheet(isPresented: $showingVoiceMode) {
-      VoiceModeView(settingsManager: settingsManager)
+      VoiceModeView()
     }
 #else
     .fullScreenCover(isPresented: $showingVoiceMode) {
-      VoiceModeView(settingsManager: settingsManager)
+      VoiceModeView()
     }
 #endif
   }
